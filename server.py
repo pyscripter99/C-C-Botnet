@@ -2,6 +2,7 @@ from random import choice
 import socket, os, threading, json
 from cryptography.fernet import Fernet
 import requests
+import updater
 
 chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPWRSTUVWXYZ1234567890!@#$%^&*()"
 
