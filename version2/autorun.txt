@@ -1,2 +1,0 @@
-whoami
-echo hello there, i am the client!
