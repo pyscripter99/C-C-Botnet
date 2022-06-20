@@ -1,4 +1,6 @@
 # C-C-Botnet
+### DO NOT USE!!! NEW VERSION: ###
+
 A botnet in python, but it is bad!!
 
 run dropper.py on your victim, port forwarding required, also it uses 127.0.0.1, so it is ONLY development
